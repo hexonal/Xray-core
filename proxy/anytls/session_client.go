@@ -61,7 +61,14 @@ func (s *session) writePacketWithPadding(packetIndex uint32, frames buf.MultiBuf
 			var finalToSend buf.MultiBuffer
 			if pad > 0 {
 				wb := buf.New()
-				paddingFrame := (&frame{cmd: cmdWaste, sid: 0, data: wb.Extend(pad)}).toMultiBuffer()
+				wb.Extend(pad)
+				// toMultiBufferWithBody takes ownership of wb directly (no
+				// copy). The old toMultiBuffer(data: wb.Extend(pad)) path
+				// copied wb's bytes into a second buf.New() and never
+				// released wb itself — every padding frame here leaked an
+				// 8KB pooled buffer straight to the GC instead of back to
+				// the pool.
+				paddingFrame := (&frame{cmd: cmdWaste, sid: 0}).toMultiBufferWithBody(wb)
 				finalToSend, _ = buf.MergeMulti(b, paddingFrame)
 				err := s.fw.bw.WriteMultiBuffer(finalToSend)
 				if err != nil {
@@ -86,7 +93,8 @@ func (s *session) writePacketWithPadding(packetIndex uint32, frames buf.MultiBuf
 		} else {
 			wb := buf.New()
 			wb.Clear()
-			padding := (&frame{cmd: cmdWaste, sid: 0, data: wb.Extend(size)}).toMultiBuffer()
+			wb.Extend(size)
+			padding := (&frame{cmd: cmdWaste, sid: 0}).toMultiBufferWithBody(wb)
 			err := s.fw.bw.WriteMultiBuffer(padding)
 			if err != nil {
 				return err

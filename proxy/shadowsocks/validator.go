@@ -548,7 +548,11 @@ func (v *Validator) GetWithCache(bs []byte, command protocol.RequestCommand, cac
 				// 优化：使用内存池获取TCP数据缓冲区
 				data := getTCPData(4 + aead.NonceSize())
 				ret, matchErr = aead.Open(data[:0], data[4:], bs[ivLen:ivLen+18], nil)
-				// TCP数据在返回后仍需使用，所以暂不归还到池
+				// aead.Open 这里只是用来验证候选用户的 key 是否匹配，解密出来
+				// 的内容本身在 TCP 路径上不会被上层调用方读取（真正的数据流
+				// 会用确认后的 key 重新解密），所以不管匹不匹配都可以立即
+				// 归还，不用等到函数返回之后。
+				putTCPData(data)
 
 			case protocol.RequestCommandUDP:
 				// 优化：使用内存池获取UDP数据缓冲区

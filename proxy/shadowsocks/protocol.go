@@ -302,7 +302,8 @@ func DecodeUDPPacketWithCache(validator *Validator, payload *buf.Buffer, cacheKe
 
 	if account.Cipher.IsAEAD() {
 		payload.Clear()
-		payload.Write(d)
+		payload.Write(d) // copies d's bytes into payload's own buffer
+		putUDPData(d)    // ...so d's backing array can go back to the pool now
 	} else {
 		if account.Cipher.IVSize() > 0 {
 			iv := make([]byte, account.Cipher.IVSize())

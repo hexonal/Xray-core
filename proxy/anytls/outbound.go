@@ -44,6 +44,9 @@ type Client struct {
 	sessionsMu   sync.Mutex
 	sessions     map[uint64]*session
 	sessionSeq   atomic.Uint64
+
+	stopCh    chan struct{}
+	closeOnce sync.Once
 }
 
 func NewClient(ctx context.Context, config *ClientConfig) (*Client, error) {
@@ -73,6 +76,7 @@ func NewClient(ctx context.Context, config *ClientConfig) (*Client, error) {
 		defaultPaddingScheme:     getDefaultPaddingScheme(),
 		authHash:                 sha256.Sum256([]byte(account.Password)),
 		sessions:                 make(map[uint64]*session),
+		stopCh:                   make(chan struct{}),
 	}
 	client.authPadding = getPadding0Size(client.defaultPaddingScheme)
 	if value := config.GetIdleSessionCheckInterval(); value > 0 {
@@ -222,11 +226,36 @@ func (c *Client) markSessionIdle(sess *session) {
 	c.poolMu.Unlock()
 }
 
+// Close stops the idle-session cleanup goroutine and closes every session
+// this client still holds (active or idle). Without this, common.Close on
+// an anytls outbound handler was a no-op (Client implemented no Closable
+// method), so cleanupIdleSessions' `for range ticker.C` loop — and every
+// TCP connection cached in c.sessions/c.idleSessions — leaked for the life
+// of the process whenever the handler was removed/replaced.
+func (c *Client) Close() error {
+	c.closeOnce.Do(func() {
+		close(c.stopCh)
+		c.sessionsMu.Lock()
+		sessions := c.sessions
+		c.sessions = make(map[uint64]*session)
+		c.sessionsMu.Unlock()
+		for _, sess := range sessions {
+			sess.close(nil)
+		}
+	})
+	return nil
+}
+
 func (c *Client) cleanupIdleSessions() {
 	ticker := time.NewTicker(c.idleSessionCheckInterval)
 	defer ticker.Stop()
 
-	for range ticker.C {
+	for {
+		select {
+		case <-c.stopCh:
+			return
+		case <-ticker.C:
+		}
 		now := time.Now()
 		var toClose []*session
 

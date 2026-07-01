@@ -76,3 +76,20 @@ func getTCPData(size int) []byte {
 func getUDPData() []byte {
 	return udpDataPool.Get().([]byte)
 }
+
+// putTCPData 归还 TCP 数据缓冲区到池
+// 此前 getTCPData 一直有调用方，但没有任何地方调用归还，池子只会
+// Get miss、从不命中，比完全不用池还差（多了一次 sync.Pool 的 per-P
+// 查找开销，外加还是要 make 一次）。
+func putTCPData(buf []byte) {
+	if cap(buf) == 128 {
+		tcpSmallDataPool.Put(buf[:128])
+	}
+}
+
+// putUDPData 归还 UDP 数据缓冲区到池，理由同上。
+func putUDPData(buf []byte) {
+	if cap(buf) == 8192 {
+		udpDataPool.Put(buf[:8192])
+	}
+}

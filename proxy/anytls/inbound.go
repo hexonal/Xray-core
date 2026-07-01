@@ -79,7 +79,6 @@ func (s *Server) Close() error {
 	return nil
 }
 
-
 func (s *Server) Process(ctx context.Context, network xnet.Network, conn stat.Connection, dispatcher routing.Dispatcher) error {
 	sessPol := s.policyManager.ForLevel(0)
 	_ = conn.SetReadDeadline(time.Now().Add(sessPol.Timeouts.Handshake))
