@@ -43,6 +43,27 @@ func (c *fragmentConn) Splice() bool {
 	return true
 }
 
+// closeWriter matches reality.CloseWriteConn's method set (net.Conn is
+// already satisfied via the embedded field above).
+type closeWriter interface {
+	CloseWrite() error
+}
+
+// CloseWrite makes *fragmentConn satisfy reality.CloseWriteConn, which
+// transport/internet/reality's Server() hard type-asserts the wrapped conn
+// against for its splice-to-real-destination fallback path. Embedding
+// net.Conn as an interface field (not a concrete type) doesn't promote
+// CloseWrite() — it isn't part of the net.Conn interface — so without this,
+// finalmask.tcp:fragment layered under security:reality panics the whole
+// process on the very first connection (same root cause as finalmask/xmc
+// and header-custom, confirmed via XTLS/Xray-core#6453 in production).
+func (c *fragmentConn) CloseWrite() error {
+	if cw, ok := c.Conn.(closeWriter); ok {
+		return cw.CloseWrite()
+	}
+	return c.Conn.Close()
+}
+
 // lengthForSegment returns the length range (min, max) for the given segment index (0-based).
 // Clamps to the last entry when the index exceeds the list length.
 func (c *fragmentConn) lengthForSegment(segIdx int) (int64, int64) {

@@ -152,6 +152,27 @@ func (c *tcpCustomServerConn) Splice() bool {
 	return true
 }
 
+// closeWriter matches reality.CloseWriteConn's method set (net.Conn is
+// already satisfied via the embedded field above).
+type closeWriter interface {
+	CloseWrite() error
+}
+
+// CloseWrite makes *tcpCustomServerConn satisfy reality.CloseWriteConn,
+// which transport/internet/reality's Server() hard type-asserts the wrapped
+// conn against for its splice-to-real-destination fallback path. Embedding
+// net.Conn as an interface field (not a concrete type) doesn't promote
+// CloseWrite() — it isn't part of the net.Conn interface — so without this,
+// finalmask.tcp:header-custom layered under security:reality panics the
+// whole process on the very first connection (same root cause as
+// finalmask/xmc, confirmed via XTLS/Xray-core#6367 in production).
+func (c *tcpCustomServerConn) CloseWrite() error {
+	if cw, ok := c.Conn.(closeWriter); ok {
+		return cw.CloseWrite()
+	}
+	return c.Conn.Close()
+}
+
 func (c *tcpCustomServerConn) Read(p []byte) (n int, err error) {
 	c.once.Do(func() {
 		ctx := newEvalContextWithAddrs(c.LocalAddr(), c.RemoteAddr())
