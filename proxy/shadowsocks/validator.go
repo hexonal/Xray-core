@@ -583,17 +583,6 @@ func (v *Validator) GetWithCache(bs []byte, command protocol.RequestCommand, cac
 		} else {
 			u = user
 			ivLen = user.Account.(*MemoryAccount).Cipher.IVSize()
-			// err = user.Account.(*MemoryAccount).CheckIV(bs[:ivLen]) // The IV size of None Cipher is 0.
-
-			// 优化：更新两级缓存
-			if cacheKey != "" && v.userCache != nil {
-				v.userCache.PutWithSuccess(cacheKey, user)
-			}
-
-			// 防御已启用时才记录验证成功
-			if v.defenseEnabled && defenseKey != "" && v.attackDefense != nil {
-				v.attackDefense.RecordSuccess(defenseKey)
-			}
 			return
 		}
 	}
