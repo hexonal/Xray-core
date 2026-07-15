@@ -185,6 +185,24 @@ func (i *MultiUserInbound) GetUsersCount(context.Context) int64 {
 	return int64(len(i.users))
 }
 
+// userAt safely reads i.users[idx] under the same lock AddUser/RemoveUser
+// mutate it under. NewConnection/NewPacketConnection used to index
+// i.users[userInt] with no lock at all, racing RemoveUser's swap-delete
+// (i.users[idx] = i.users[last]; i.users = i.users[:last-1]) — a concurrent
+// removal of a different user could either shrink the slice out from under
+// an in-flight index (panic: index out of range) or swap a different
+// user's pointer into this slot (misattributed traffic/billing). Bounds
+// are re-checked here too since the index itself is untrusted input from
+// sing-shadowsocks' auth match, not just a stale-read hazard.
+func (i *MultiUserInbound) userAt(idx int) (*protocol.MemoryUser, bool) {
+	i.Lock()
+	defer i.Unlock()
+	if idx < 0 || idx >= len(i.users) {
+		return nil, false
+	}
+	return i.users[idx], true
+}
+
 func (i *MultiUserInbound) Network() []net.Network {
 	return i.networks
 }
@@ -229,7 +247,10 @@ func (i *MultiUserInbound) Process(ctx context.Context, network net.Network, con
 func (i *MultiUserInbound) NewConnection(ctx context.Context, conn net.Conn, metadata M.Metadata) error {
 	inbound := session.InboundFromContext(ctx)
 	userInt, _ := A.UserFromContext[int](ctx)
-	user := i.users[userInt]
+	user, ok := i.userAt(userInt)
+	if !ok {
+		return errors.New("user index out of range (removed mid-connection?): ", userInt)
+	}
 	inbound.User = user
 	ctx = log.ContextWithAccessMessage(ctx, &log.AccessMessage{
 		From:   metadata.Source,
@@ -253,7 +274,10 @@ func (i *MultiUserInbound) NewConnection(ctx context.Context, conn net.Conn, met
 func (i *MultiUserInbound) NewPacketConnection(ctx context.Context, conn N.PacketConn, metadata M.Metadata) error {
 	inbound := session.InboundFromContext(ctx)
 	userInt, _ := A.UserFromContext[int](ctx)
-	user := i.users[userInt]
+	user, ok := i.userAt(userInt)
+	if !ok {
+		return errors.New("user index out of range (removed mid-connection?): ", userInt)
+	}
 	inbound.User = user
 	ctx = log.ContextWithAccessMessage(ctx, &log.AccessMessage{
 		From:   metadata.Source,
