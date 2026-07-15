@@ -258,6 +258,18 @@ type closeWriter interface {
 // passthrough to the underlying conn is correct. Without this method,
 // finalmask.tcp:xmc layered under security:reality panics the whole
 // process on the very first connection (confirmed via local repro).
+//
+// Upstream position (XTLS/Xray-core#6497, closed by maintainer Fangliding,
+// quoting RPRX in issue #6367): REALITY should not be combined with any TCP
+// Finalmask at all — "没有意义" (pointless), since REALITY's own TLS mimicry
+// already provides the anti-detection property Finalmask would add, and if
+// the actual goal is cert-free strong encryption, VLESS Encryption
+// (mlkem768x25519plus) is the sanctioned path, not layering a weaker cipher
+// (XMC's RSA-1024+CFB8) underneath REALITY. This fix stays because the
+// crash is real and this code path shouldn't panic the whole process
+// regardless — but per upstream guidance, finalmask.tcp:xmc + security:reality
+// is "doesn't crash if you insist" territory, not a combination we should
+// actively configure or recommend in production.
 func (c *serverConn) CloseWrite() error {
 	if cw, ok := c.c.(closeWriter); ok {
 		return cw.CloseWrite()
