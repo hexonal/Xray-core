@@ -124,6 +124,15 @@ func (s *session) handleNewStream(ctx context.Context, st *stream, body buf.Mult
 	l, err := s.dispatcher.Dispatch(dispatchCtx, dest)
 	if err != nil {
 		errors.LogWarning(ctx, "anytls: new stream dispatcher error, streamId=", st.sid, " err=", err)
+		// Used to just log and return here, unlike the parallel UDP-over-TCP
+		// unsupported-destination branch just above: body (the client's
+		// already-buffered payload) was never released (pooled-buffer
+		// leak), no FIN was sent so the client's stream just hangs forever
+		// waiting for a response that will never come, and st stayed
+		// registered in s.streams forever with a nil link.
+		buf.ReleaseMulti(body)
+		_ = s.sendFrame(newFrame(cmdFIN, st.sid))
+		s.finishStream(st.sid, nil)
 		return nil
 	}
 	st.link = l
@@ -356,8 +365,23 @@ func (s *session) pumpUoTDownlink(sid uint32, link *transport.Link, isConnect bo
 	defer func() {
 		s.streamsMu.Lock()
 		st := s.streams[sid]
-		delete(s.streams, sid)
+		// handleUDPFrame's destination-switch path (st.udpTarget changing
+		// mid-stream) replaces st.link with a fresh link and starts a new
+		// pumpUoTDownlink for it, then closes *this* link's reader/writer -
+		// which is exactly what unblocks this goroutine's ReadMultiBuffer
+		// below and gets us here. Without this check, this now-stale pump's
+		// cleanup deleted the stream entirely, closed the brand-new link it
+		// doesn't own (st.link, read fresh, already points at the newer
+		// one), and sent a premature FIN - tearing down the connection the
+		// fresh pump was actively still using for the new destination.
+		stale := st != nil && st.link != link
+		if st != nil && !stale {
+			delete(s.streams, sid)
+		}
 		s.streamsMu.Unlock()
+		if stale {
+			return
+		}
 		if st != nil && st.link != nil {
 			common.Close(st.link.Writer)
 			common.Close(st.link.Reader)
@@ -468,6 +492,11 @@ func (s *session) sendStreamData(sid uint32, data buf.MultiBuffer, packetIndex u
 			merge, _ := buf.MergeMulti(buf.MultiBuffer{b}, chunk)
 			s.writeMu.Lock()
 			if err := s.writePacketWithPadding(packetIndex, merge); err != nil {
+				// Used to return here without unlocking, permanently
+				// wedging the session's write mutex - every subsequent
+				// sendStreamData/sendFrame call on this session would
+				// deadlock forever on s.writeMu.Lock().
+				s.writeMu.Unlock()
 				return err
 			}
 			s.writeMu.Unlock()
