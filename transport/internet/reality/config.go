@@ -14,7 +14,16 @@ import (
 )
 
 func (c *Config) GetREALITYConfig() *reality.Config {
-	var dialer net.Dialer
+	// Zero-value net.Dialer has no Timeout, and reality.Server() calls this
+	// with context.Background() (no deadline either) - this dial to the
+	// disguise destination runs synchronously on EVERY inbound REALITY
+	// connection, before the client's handshake is even validated. Without a
+	// bound, a disguise dest that's transiently blackholed (not RST'd) falls
+	// back to the OS's default TCP connect retry ceiling (~127s on stock
+	// Linux), stalling every new connection attempt for up to ~2 minutes.
+	// 16s matches transport/internet/system_dialer.go's existing convention
+	// for real outbound proxy dials in this same codebase.
+	dialer := net.Dialer{Timeout: 16 * time.Second}
 	config := &reality.Config{
 		DialContext: dialer.DialContext,
 
